@@ -1,13 +1,15 @@
+#include 	<string.h>
 #include    "acc_socket.h"
 
 
 void sig_chld(int signo)
 {
+	pid_t pid;
 	int stat;
-	if (signo == SIGCHLD)
-	{
-		wait(&stat);
-	}
+
+	while ( (pid = waitpid(-1, &stat, WNOHANG)) > 0) {}
+
+	return;
 }
 
 /* Reads a message from a socket until an EOF character is reached */
@@ -60,11 +62,12 @@ ssize_t acc_socket_read(int sockfd, void* vptr, size_t maxlen)
 /* Daemon process to listen to a socket */
 int acc_listen_daemon(int port, char* returnIp)
 {
-	int			listenfd, connfd;
-	pid_t			childpid;
-	socklen_t		clilen;
+	int					listenfd, connfd;
+	char				buff[__IPV4_STR_LEN];
+	pid_t				childpid;
+	socklen_t			clilen;
+	const char			*ptr;
 	struct sockaddr_in	cliaddr, servaddr;
-	void			sig_chld(int);
 
 	if ( (listenfd = socket(AF_INET, SOCK_STREAM, 0)) < 0){
 		fprintf(stderr, "socket error\n");
@@ -81,18 +84,18 @@ int acc_listen_daemon(int port, char* returnIp)
 		return -1;
 	}
 
-
 	if ( listen(listenfd, LISTENQ) < 0 ){
 		fprintf(stderr, "listen error\n");
 		return -1;
 	}
 
-	signal(SIGCHLD, sig_chld);	/* must call waitpid() */
 
+	clilen = sizeof(cliaddr);
 	for ( ; ; ) {
-		clilen = sizeof(cliaddr);
+		
+		/* Accept socket */
 		if ( (connfd = accept(listenfd, (SA *) &cliaddr, &clilen)) < 0) {
-			if (errno == EINTR)
+			if (errno == EINTR) /* If a system interrupt occur */
 			{
 				continue;	/* back to fork() */
 			}	
@@ -103,13 +106,25 @@ int acc_listen_daemon(int port, char* returnIp)
 			}
 		}
 
-		if ( (childpid = fork()) == 0) {	/* child process */
-			close(listenfd);	/* close listening socket */
-
-			return connfd;
+		/* Retrieve IP in text form */
+		ptr = inet_ntop(AF_INET, &cliaddr.sin_addr, buff, sizeof(buff));
+		if ( ptr  == NULL ) {
+			if (errno == EINTR) /* If a interrupt occured */
+			{
+				continue; /* back to fork() */
+			}
+			else
+			{
+				fprintf(stderr, "inet_ntop error\n");
+				return -1;
+			}
 		}
-		close(connfd);		/* parent closes connected socket */
+
+		if ( (childpid = fork()) == 0) {	/* child process */
+			break;
+		}
 	}
+
+	strncpy(returnIp, buff, __IPV4_STR_LEN);
+	return connfd;
 }
-
-
