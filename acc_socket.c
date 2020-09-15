@@ -1,19 +1,23 @@
 #include 	<string.h>
 #include    "acc_socket.h"
 
-
+/* systems signal handler for SIGCHLD */
 void sig_chld(int signo)
 {
 	pid_t pid;
 	int stat;
 
-	while ( (pid = waitpid(-1, &stat, WNOHANG)) > 0) {}
+	while ( (pid = waitpid(-1, &stat, WNOHANG)) > 0) {
+ #ifdef DEBUG /* avoid using I/O in system call, only for debug */
+		printf("%d > terminated %d\n", getpid(), pid);
+ #endif   
+	}
 
 	return;
 }
 
 /* Reads a message from a socket until an EOF character is reached */
-static ssize_t my_read(int fd, char *ptr)
+ssize_t acc_socket_read(int fd, char *ptr)
 {
 	static int	read_cnt = 0;
 	static char	*read_ptr;
@@ -35,14 +39,14 @@ again:
 	return(1);
 }
 
-ssize_t acc_socket_read(int sockfd, void* vptr, size_t maxlen)
+ssize_t acc_socket_readline(int sockfd, void* vptr, size_t maxlen)
 {
 	int		n, rc;
 	char	c, *ptr;
 
 	ptr = vptr;
 	for (n = 1; n < maxlen; n++) {
-		if ( (rc = my_read(sockfd, &c)) == 1) {
+		if ( (rc = acc_socket_read(sockfd, &c)) == 1) {
 			*ptr++ = c;
 			if (c == '\n')
 				break;	/* newline is stored, like fgets() */
@@ -59,6 +63,30 @@ ssize_t acc_socket_read(int sockfd, void* vptr, size_t maxlen)
 	return(n);
 }
 
+ssize_t						/* Write "n" bytes to a descriptor. */
+acc_socket_write(int fd, const void *vptr, size_t n)
+{
+	size_t		nleft;
+	ssize_t		nwritten;
+	const char	*ptr;
+
+	ptr = vptr;
+	nleft = n;
+	while (nleft > 0) {
+		if ( (nwritten = write(fd, ptr, nleft)) <= 0) {
+			if (errno == EINTR)
+				nwritten = 0;		/* and call write() again */
+			else
+				return(-1);			/* error */
+		}
+
+		nleft -= nwritten;
+		ptr   += nwritten;
+	}
+	return(n);
+}
+/* end writen */
+
 /* Daemon process to listen to a socket */
 int acc_listen_daemon(int port, char* returnIp)
 {
@@ -69,15 +97,23 @@ int acc_listen_daemon(int port, char* returnIp)
 	const char			*ptr;
 	struct sockaddr_in	cliaddr, servaddr;
 
+
 	if ( (listenfd = socket(AF_INET, SOCK_STREAM, 0)) < 0){
 		fprintf(stderr, "socket error\n");
+		return -1;
+	}
+
+	/* Allows bind() to resuse local address */
+	if (setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)) < 0)
+	{
+		fprintf(stderr, "setsockopt failed\n");
 		return -1;
 	}
 
 	bzero(&servaddr, sizeof(servaddr));
 	servaddr.sin_family      = AF_INET;
 	servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
-	servaddr.sin_port        = htons(SERV_TCP_PORT);
+	servaddr.sin_port        = htons(SERV_TCP_PORT); /* daytime server */
 
 	if ( bind(listenfd, (SA *) &servaddr, sizeof(servaddr)) < 0){
 		fprintf(stderr, "bind error\n");
@@ -89,11 +125,12 @@ int acc_listen_daemon(int port, char* returnIp)
 		return -1;
 	}
 
-
-	clilen = sizeof(cliaddr);
+	printf("%d > Listening on port %d\n", getpid(), port);
 	for ( ; ; ) {
+		/* signal should not be inside the loop, but I can't get it to work otherwise */
+		signal(SIGCHLD, sig_chld);
 		
-		/* Accept socket */
+		clilen = sizeof(cliaddr);
 		if ( (connfd = accept(listenfd, (SA *) &cliaddr, &clilen)) < 0) {
 			if (errno == EINTR) /* If a system interrupt occur */
 			{
@@ -121,10 +158,12 @@ int acc_listen_daemon(int port, char* returnIp)
 		}
 
 		if ( (childpid = fork()) == 0) {	/* child process */
+			close(listenfd);
 			break;
 		}
 	}
 
 	strncpy(returnIp, buff, __IPV4_STR_LEN);
+	printf("%d > connected with IP: %s\n", getpid(), returnIp);
 	return connfd;
-}
+} /* acc_listen_daemon() */

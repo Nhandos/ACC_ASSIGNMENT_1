@@ -16,5 +16,6 @@ enum command
 
 int assert_command_args(int command, int argc, char** argv);
 int await_cli_command(int socketfd, int* argc, char** argv);
+void start_storage_srv(FILE *fp, int sockfd);
 
 #endif

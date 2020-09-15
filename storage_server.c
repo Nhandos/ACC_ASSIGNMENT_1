@@ -11,8 +11,7 @@
  */
 static void trim_trailing(char * str)
 {
-    int index, i;
-
+    int index, i; 
     /* Set default index */
     index = -1;
 
@@ -69,14 +68,12 @@ int await_cli_command(int sockfd, int* argc, char** argv)
     char*       token;
     int         n_token;
     
-    if ((n = acc_socket_read(sockfd, buffer, MAXLINE)) < 0)
+    if ((n = acc_socket_readline(sockfd, buffer, MAXLINE)) < 0)
     {
         fprintf(stderr, "socket read error\n");
         return INVALID;
     }
-
-    /* Check if EOF was sent */
-    if (n == 0)
+    else if(n == 0) /* EOF received */
     {
         return QUIT;
     }
@@ -117,6 +114,36 @@ int await_cli_command(int sockfd, int* argc, char** argv)
     else 
     {
         return INVALID;
+    }
+}
+
+void start_storage_srv(FILE *fp, int sockfd){
+
+    int     argc;
+    char*   argv[MAX_COMMAND_ARGS]; 
+    int     command;
+
+    for ( ;; ) /* Serve this connection until client disconnects */
+    {
+        command = await_cli_command(sockfd, &argc, argv);
+        fprintf(fp, "%d > Command = %d\n", getpid(), command);
+
+        switch (command)
+        {
+            case STORE:
+                /* Sends an acknowledgment to client and prepare to stream file */
+                acc_socket_write(sockfd, "ACK\n", 4);
+                break;
+
+            case INVALID:
+                acc_socket_write(sockfd, "ACK\n", 4);
+                break;
+
+            case QUIT:
+                close(sockfd);
+                return;
+            
+        }
     }
 }
 
